@@ -48,12 +48,21 @@ Desktop application for managing Google Veo3 video-generation workflows.
 - Node.js v24.15.0, npm 11.12.1
 - WebView2 Runtime present (system-installed)
 
-## Current State (2026-04-30)
+## Current State (2026-05-05)
 - UI shell + mock backend complete; `wails build` produces ~11 MB exe.
 - Bound methods (11): Settings.{Get,Save,DetectChromePath}, CDP.{GetStatus,Test}, Videos.{List,Create,Delete}, Misc.{GetSelectorConfigPath,OpenPathInOS,SelectFolder}.
 - Events: `cdp:status`, `video:progress`, `videos:changed`.
-- `runMockGeneration` in `app.go` is a 7.8s mock — replace with real CDP automation in `internal/automation/`.
 - `/localfile/` HTTP handler in `main.go` serves files under configured `OutputDir` with path-traversal protection.
 - Storage: JSON files at `%APPDATA%/veo3-manager/{settings,videos,selectors}.json`. Mutex-safe via `internal/store`.
 - Tests: `go test ./...` covers store CRUD + handler security.
 - Roadmap: see `docs/project-roadmap.md`.
+
+## Real CDP Automation (2026-05-05)
+
+API client now sends the correct wrapped envelope and reCAPTCHA token — three bugs fixed:
+
+1. **Wire envelope**: request body is `{"clientContext": {...}, "requests": [{...}]}` — old flat `{prompt, modelId}` shape is gone (`internal/api/types.go`, `internal/api/client.go`).
+2. **Seed type**: changed int64 → int32 to satisfy API TYPE_INT32 constraint.
+3. **reCAPTCHA Enterprise**: `internal/automation/recaptcha.go` exposes `Browser.DetectRecaptchaSiteKey()` and `Browser.GetRecaptchaEnterpriseToken(siteKey, action)`; token sent as header `X-Goog-Recaptcha-Token` and body field `clientContext.recaptchaToken`. Pipeline wired in `app_pipeline.go`.
+
+To capture a live request for diffing: `go run ./cmd/uidrive -prompt "test"` (Chrome must run with `--remote-debugging-port=9222`). See `docs/api-shape.md` for full wire shape + Known Unknowns.

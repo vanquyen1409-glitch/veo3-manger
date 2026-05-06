@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"time"
 
@@ -43,7 +44,7 @@ func (a *App) runGeneration(videoID string) {
 		return
 	}
 
-	redirectURL, err := a.submitAndWait(videoID, token)
+	redirectURL, err := a.submitAndWait(videoID, token, browser)
 	if err != nil {
 		return
 	}
@@ -85,7 +86,7 @@ func (a *App) extractToken(videoID string, browser *automation.Browser) (string,
 
 // submitAndWait posts the prompt and polls until terminal status. Returns
 // the redirect URL of the first successful media on success.
-func (a *App) submitAndWait(videoID, token string) (string, error) {
+func (a *App) submitAndWait(videoID, token string, browser *automation.Browser) (string, error) {
 	a.emitStage(videoID, types.StageWaitingVideo, "Đang gửi prompt và chờ video...")
 	video, ok := a.store.GetVideo(videoID)
 	if !ok {
@@ -93,7 +94,60 @@ func (a *App) submitAndWait(videoID, token string) (string, error) {
 		a.failVideo(videoID, err)
 		return "", err
 	}
-	client := api.New(func(_ context.Context) (string, error) { return token, nil })
+
+	// Detect the reCAPTCHA Enterprise site key on the labs.google page once,
+	// then build a token provider that fetches a fresh token per submit.
+	// If detection fails (no key in DOM), proceed without reCAPTCHA — the
+	// API will return HTTP 403 with a clear error if the token is required.
+	siteKey, _ := browser.DetectRecaptchaSiteKey(a.ctx)
+
+	// Drain any captured grecaptcha.enterprise.execute calls the page made
+	// (e.g. preflight risk evaluations triggered on page load). The captured
+	// action is the EXACT string the page uses; using it instead of our
+	// hardcoded "submit" default is what fixes HTTP 403 reCAPTCHA evaluation
+	// failures. Fallback chain (in priority order):
+	//   1. Latest fresh capture from this drain
+	//   2. Browser's last cached observation (from a prior submit in this session)
+	//   3. Hardcoded DefaultRecaptchaAction ("submit") — original behavior
+	recaptchaAction := api.DefaultRecaptchaAction
+	captureSource := "fallback"
+	if calls, err := browser.DrainCapturedRecaptcha(a.ctx); err != nil {
+		log.Printf("[pipeline] drain capture failed (sẽ dùng default): %v", err)
+	} else if best := automation.PickBestCapture(calls, siteKey); best.Action != "" {
+		recaptchaAction = best.Action
+		captureSource = "captured"
+		if best.SiteKey != "" {
+			siteKey = best.SiteKey
+		}
+	} else if cached := browser.LastRecaptcha(); cached.Action != "" {
+		// Fresh drain empty but we already learned the action in a prior
+		// submit — reuse it instead of regressing to the default.
+		recaptchaAction = cached.Action
+		captureSource = "cached"
+		if cached.SiteKey != "" {
+			siteKey = cached.SiteKey
+		}
+	}
+	log.Printf("[pipeline] reCAPTCHA siteKey=%s action=%q source=%s", siteKey, recaptchaAction, captureSource)
+
+	clientOpts := []api.Option{api.WithRecaptchaAction(recaptchaAction)}
+	if siteKey != "" {
+		clientOpts = append(clientOpts, api.WithRecaptchaProvider(
+			func(ctx context.Context, action string) (string, error) {
+				return browser.GetRecaptchaEnterpriseToken(ctx, siteKey, action)
+			},
+		))
+	}
+
+	// Project ID from current URL (e.g. /project/<id>). Optional — kept
+	// behind a log so a wrong/missing extraction is visible without breaking
+	// the submit (the field is omitempty in the envelope).
+	projectID := api.ParseProjectIDFromURL(browser.CurrentURL(a.ctx))
+	if projectID != "" {
+		log.Printf("[pipeline] projectId=%s", projectID)
+	}
+
+	client := api.New(func(_ context.Context) (string, error) { return token, nil }, clientOpts...)
 	submitResp, err := client.Submit(a.ctx, api.SubmitRequest{
 		Prompt:         video.Prompt,
 		NegativePrompt: video.NegativePrompt,
@@ -101,6 +155,7 @@ func (a *App) submitAndWait(videoID, token string) (string, error) {
 		Resolution:     string(video.Resolution),
 		DurationSec:    video.Duration,
 		OutputCount:    1,
+		ProjectID:      projectID,
 	})
 	if err != nil {
 		a.failVideo(videoID, fmt.Errorf("submit prompt: %w", err))

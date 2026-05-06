@@ -6,8 +6,15 @@ import (
 	"net/http"
 )
 
-// APIError is returned for non-2xx responses. Body is truncated to 200 chars
-// so it's safe to log without leaking large payloads.
+// errorBodyMax bounds APIError body excerpts. Bumped from 200 → 2000 because
+// Google's protobuf-style validation errors include the JSON path of the
+// offending field, which gets truncated below ~500 chars on real responses
+// (e.g. nested "Invalid value at 'requests[0].seed'" diagnostics).
+const errorBodyMax = 2000
+
+// APIError is returned for non-2xx responses. Body is truncated so it's safe
+// to log without leaking large payloads, but kept long enough to surface the
+// API's full validation diagnostic.
 type APIError struct {
 	StatusCode int
 	Body       string

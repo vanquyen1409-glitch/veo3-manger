@@ -1,3 +1,5 @@
 build/bin
 node_modules
 frontend/dist
+# Stray probe binaries occasionally produced by ad-hoc CDP scripts.
+probe-flow.exe

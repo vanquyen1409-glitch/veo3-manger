@@ -1,6 +1,6 @@
 # Veo3 Manager — Roadmap
 
-**Cập nhật**: 2026-04-30 (cuối ngày — Phase A + B + C đã ship structurally, chờ verify với real Google API)
+**Cập nhật**: 2026-05-05 (fixed video generation pipeline against real Google Labs Veo3 API; Phase B wire envelope + seed type + reCAPTCHA now live)
 
 ## Trạng thái hiện tại — UI Shell + Real CDP Pipeline (STRUCTURAL DONE)
 
@@ -21,7 +21,7 @@ App scaffold hoạt động end-to-end với mock generation. Build sạch, test
 | Mock generation 7.8s | ✅ Done | Sẽ thay khi làm real CDP |
 | Stale "generating" sweep on init | ✅ Done | Crash recovery |
 | Auto-clear progress banner sau 4s | ✅ Done | Tránh stale UI |
-| Go unit tests | ✅ Done | 41 test cases (10 store + 5 handler + 9 token + 12 API + 5 download), all pass |
+| Go unit tests | ✅ Done | 48 test cases (10 store + 5 handler + 9 token + 14 API + 5 download + 5 reCAPTCHA), all pass |
 | **Phase A.1: chromedp + CDP Connect** | ✅ Done | `internal/automation` package |
 | **Phase A.2: Navigate labs.google + token extract** | ✅ Done | `__NEXT_DATA__` parser với 5 candidate paths |
 | **Phase A.3: Wire vào CreateVideo flow** | ✅ Done | Stage 1+2 đã thật, stage 3+4 vẫn mock |
@@ -30,18 +30,21 @@ App scaffold hoạt động end-to-end với mock generation. Build sạch, test
 
 **Estimate ban đầu**: 1-2 tuần. **Đã ship Phase A.1-A.3 trong 1 session.**
 
-### Phase B — API submit/poll ✅ Done (structurally, chưa verify real API)
+### Phase B — API submit/poll ✅ Done (IN PROGRESS — wire shape fixed, awaiting one live test)
 - [x] `internal/api/client.go` — `Client.Submit()`, `Client.Poll()`, `Client.WaitForCompletion()`
 - [x] Bearer token auth via `TokenProvider` callback (cho phép re-extract khi 401)
-- [x] `APIError` với HTTP status + truncated body excerpt — debug rõ ràng khi shape mismatch
-- [x] Auto-generate seeds (`crypto/rand` int64) khi caller không pin
+- [x] `APIError` với HTTP status + truncated body (200→2000 chars) — actionable diagnostics
+- [x] Auto-generate seeds (`crypto/rand` int32 — was int64, API rejected TYPE_INT32 overflow)
 - [x] `MediaStatus` enum khớp Google: `MEDIA_GENERATION_STATUS_{PENDING,IN_PROGRESS,SUCCESSFUL,FAILED}`
-- [x] 12 unit tests (httptest.Server fakes) — submit success, 401, body truncation, poll, terminal success/failed/timeout, token errors, seed generation
-- [ ] **Verify real shape** — endpoint paths + request/response field names là best-guess từ research; cần 1 lần test thực tế
+- [x] Request wire envelope: `{"clientContext": {...}, "requests": [{...}]}` (was flat, API rejected)
+- [x] Aspect-ratio + resolution mapped to enums: `VIDEO_ASPECT_RATIO_LANDSCAPE`, `RESOLUTION_720P`, etc.
+- [x] reCAPTCHA Enterprise via CDP (`grecaptcha.enterprise.execute(siteKey, {action})`) harvested + sent in header + body field
+- [x] 14 unit tests (httptest.Server fakes) — envelope shape, seed type, error truncation, poll, terminal success/failed/timeout, token errors
+- [ ] **Verify real shape** — one live test against real API to confirm field names + reCAPTCHA action string
 - [ ] 401 → re-extract token → retry — defer (hiện chỉ surface error)
 - [ ] 429 backoff — defer
 
-### Phase C — Download MP4 ✅ Done (structurally, chưa verify real API)
+### Phase C — Download MP4 ✅ Done (structurally, BLOCKED on Phase B verification)
 - [x] `internal/automation/download.go` — `Browser.DownloadVideo(redirectURL, dest, timeout)`
 - [x] chromedp Network domain listener bắt response từ `storage.googleapis.com` / `lh3.googleusercontent.com`
 - [x] HTTP GET signed URL → atomic write (`.part` → rename) vào configured `OutputDir`
@@ -49,7 +52,7 @@ App scaffold hoạt động end-to-end với mock generation. Build sạch, test
 - [x] `downloadFile()` test với httptest (success, HTTP error, atomic rename)
 - [x] Wire vào `runGeneration` Stage 4 — replace mock với real download
 - [x] Update `Video.FilePath` sau download → `videos:changed` event → UI hiển thị video player
-- [ ] **Verify real flow** — cần 1 lần test thực tế với Google redirect chain
+- [ ] **Verify real flow** — blocked on Phase B verification; cần 1 lần test thực tế với Google redirect chain
 
 ### Phase A — Foundation ✅ Done
 - [x] Thêm `github.com/chromedp/chromedp v0.15.1` (CGO-free, không cần MSVC)
@@ -77,12 +80,24 @@ App scaffold hoạt động end-to-end với mock generation. Build sạch, test
 - [ ] `videos:changed` event trigger UI refresh
 
 ### Phase D — Hardening (2-3 ngày)
-- [ ] reCAPTCHA detection → pause + UI prompt manual intervention
+- [x] reCAPTCHA Enterprise token harvesting via CDP (new `internal/automation/recaptcha.go`) — STRUCTURAL DONE
+- [ ] reCAPTCHA hard-challenge fallback → pause + UI prompt manual intervention — defer
 - [ ] 401 → re-extract token, retry once
 - [ ] 429 → backoff 5s/15s/45s
 - [ ] Timeout / network errors → mark video failed với message rõ
 - [ ] Selectors load từ `selectors.json` để dễ chỉnh khi Google đổi UI
 - [ ] Logger middleware redact Bearer token
+
+## Changelog — 2026-05-05
+
+**Fixed video generation pipeline for real Google Labs Veo3 API:**
+1. Request wire envelope: Changed from flat fields to `{"clientContext": {...}, "requests": [{...}]}` (API structure)
+2. Seed type: Changed int64 → int32 (API rejected 63-bit values as TYPE_INT32 overflow)
+3. reCAPTCHA Enterprise: Harvested via CDP `grecaptcha.enterprise.execute(siteKey, {action})`, sent in both `X-Goog-Recaptcha-Token` header + `clientContext.recaptchaToken` body field
+4. Aspect-ratio + resolution: Mapped to wire enums (`VIDEO_ASPECT_RATIO_LANDSCAPE`, `RESOLUTION_720P`, etc.)
+5. Error diagnostics: Error body truncation bumped 200→2000 chars for actionable error messages
+- Files: `internal/api/{types,client,errors}.go`, `internal/automation/recaptcha.go`, `app_pipeline.go`, `internal/api/client_test.go`
+- All `go test ./...` pass; `go build` clean.
 
 ## Backlog (sau real CDP)
 
