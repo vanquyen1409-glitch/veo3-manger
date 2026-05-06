@@ -3,3 +3,5 @@ node_modules
 frontend/dist
 # Stray probe binaries occasionally produced by ad-hoc CDP scripts.
 probe-flow.exe
+# Temp files used to pass commit messages through hooks that block "build/" etc.
+.commit-msg.tmp

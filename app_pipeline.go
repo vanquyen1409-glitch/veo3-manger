@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"veo3-manager/internal/api"
@@ -109,17 +110,21 @@ func (a *App) submitAndWait(videoID, token string, browser *automation.Browser) 
 	// API will return HTTP 403 with a clear error if the token is required.
 	siteKey, _ := browser.DetectRecaptchaSiteKey(a.ctx)
 
-	// Drain any captured grecaptcha.enterprise.execute calls the page made
-	// (e.g. preflight risk evaluations triggered on page load). The captured
-	// action is the EXACT string the page uses; using it instead of our
-	// hardcoded "submit" default is what fixes HTTP 403 reCAPTCHA evaluation
-	// failures. Fallback chain (in priority order):
-	//   1. Latest fresh capture from this drain
-	//   2. Browser's last cached observation (from a prior submit in this session)
-	//   3. Hardcoded DefaultRecaptchaAction ("submit") — original behavior
+	// Resolve the reCAPTCHA action string. Priority:
+	//   1. Settings.LearnedRecaptchaAction — persisted from cmd/learn-action
+	//      (Approach D: capture once via real page submit, save to settings,
+	//      use forever). Highest priority because it's a confirmed-correct
+	//      action observed live.
+	//   2. Latest fresh capture from this session's drain.
+	//   3. Browser's cached observation from a prior submit in this session.
+	//   4. Hardcoded DefaultRecaptchaAction ("submit") — original behavior.
+	settings := a.store.GetSettings()
 	recaptchaAction := api.DefaultRecaptchaAction
 	captureSource := "fallback"
-	if calls, err := browser.DrainCapturedRecaptcha(a.ctx); err != nil {
+	if learned := strings.TrimSpace(settings.LearnedRecaptchaAction); learned != "" {
+		recaptchaAction = learned
+		captureSource = "learned"
+	} else if calls, err := browser.DrainCapturedRecaptcha(a.ctx); err != nil {
 		log.Printf("[pipeline] drain capture failed (sẽ dùng default): %v", err)
 	} else if best := automation.PickBestCapture(calls, siteKey); best.Action != "" {
 		recaptchaAction = best.Action

@@ -82,6 +82,14 @@ type Settings struct {
 	CDPPort            int    `json:"cdpPort"`
 	SelectorConfigPath string `json:"selectorConfigPath"`
 	OutputDir          string `json:"outputDir"`
+
+	// LearnedRecaptchaAction is the action string captured from a real
+	// labs.google submit (via cmd/learn-action). When set, the pipeline
+	// uses this instead of the hardcoded "submit" default — defeating the
+	// "reCAPTCHA evaluation failed" 403 caused by action mismatch. Discovered
+	// once per Google Labs API revision; cached on disk so subsequent
+	// submits don't need rediscovery. Empty means "use default fallback".
+	LearnedRecaptchaAction string `json:"learnedRecaptchaAction,omitempty"`
 }
 
 type CDPStatus struct {
