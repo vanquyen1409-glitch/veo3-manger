@@ -81,6 +81,14 @@ func (a *App) extractToken(videoID string, browser *automation.Browser) (string,
 		a.failVideo(videoID, err)
 		return "", err
 	}
+
+	// Install reCAPTCHA capture hook AFTER navigation succeeded — this avoids
+	// interfering with chromedp's lazy target setup (an earlier pre-nav install
+	// caused 51-ms "context canceled" failures on the Navigate action).
+	// Best-effort: log on failure but don't break the token extraction flow.
+	if err := browser.InstallRecaptchaCapture(a.ctx); err != nil {
+		log.Printf("[pipeline] cài capture hook thất bại (sẽ tiếp tục): %v", err)
+	}
 	return token, nil
 }
 

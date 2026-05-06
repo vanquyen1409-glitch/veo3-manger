@@ -110,12 +110,11 @@ func (b *Browser) Close() {
 // the Next.js __NEXT_DATA__ script tag to be present, and extracts the
 // authentication access token embedded in it.
 //
-// Before navigation, the reCAPTCHA capture hook is installed via
-// Page.addScriptToEvaluateOnNewDocument so the page's own
-// grecaptcha.enterprise.execute calls (e.g. preflight risk evaluations on
-// page load) are observed. The captured (siteKey, action) pairs are drained
-// later in the submit flow to learn the real action string the page uses —
-// hardcoding "submit" produced HTTP 403 reCAPTCHA evaluation failures.
+// The reCAPTCHA capture hook is installed AFTER navigation succeeds (see
+// caller in app_pipeline.go) — installing before navigation interfered with
+// chromedp's lazy target setup and caused "context canceled" failures during
+// the Navigate action. Installing post-nav still catches subsequent grecaptcha
+// calls (e.g. when the user clicks submit in-page).
 //
 // If the user is not signed in, the page typically redirects to a login page
 // where __NEXT_DATA__ won't contain a token, and this returns an error so the
@@ -123,13 +122,6 @@ func (b *Browser) Close() {
 func (b *Browser) NavigateAndExtractToken(targetURL string) (string, error) {
 	if b == nil || b.ctx == nil {
 		return "", errors.New("browser chưa kết nối")
-	}
-
-	// Best-effort: install capture hook BEFORE navigation. Don't fail the
-	// whole flow if the hook can't be installed — we degrade to the legacy
-	// fallback (hardcoded "submit" action) which is no worse than today.
-	if err := b.InstallRecaptchaCapture(b.ctx); err != nil {
-		log.Printf("[automation] cài capture hook thất bại (sẽ tiếp tục): %v", err)
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(b.ctx, 30*time.Second)
